@@ -1,16 +1,14 @@
 // Packages
 import ky from "ky-universal";
 import * as WebSocket from "isomorphic-ws";
+import dbg from "debug";
+import EventEmitter from "eventemitter3";
+import equal from "fast-deep-equal";
 
-const request = RequestPromise.defaults({ jar: true }); // <= Automatically saves and re-uses cookies.
-const boardRep = nodecg.Replicant<BingosyncBoard>("bingosync_board");
-const socketRep = nodecg.Replicant<BingosyncSocket>("bingosync_socket");
-let fullUpdateInterval: NodeJS.Timer;
-let websocket: WebSocket | null = null;
+// Ours
+import localStorage from "./isomorphic-localstorage";
 
-// save socket keys to localstorage in a map that maps from roomCode to socketKey
-// and always try the persisted key first
-// need isomorphic localstorage
+const debug = dbg("bingosync-api");
 
 export interface RoomJoinParameters {
 	roomCode: string;
@@ -18,320 +16,276 @@ export interface RoomJoinParameters {
 	passphrase?: string;
 	siteUrl?: string;
 	socketUrl?: string;
-	spectate?: true /* we only support joining as a spectator at this time */;
 }
 
-nodecg.listenFor("bingosync:joinRoom", async (data, callback) => {
-	try {
-		socketRep.value = {
-			...socketRep.value,
-			...data,
-		};
-		await joinRoom({
-			siteUrl: data.siteUrl,
-			socketUrl: data.socketUrl,
-			roomCode: data.roomCode,
-			passphrase: data.passphrase,
-			playerName: data.playerName,
-		});
-		log.info(`Successfully joined room ${data.roomCode}.`);
-		if (callback && !callback.handled) {
-			callback();
-		}
-	} catch (error) {
-		socketRep.value.status = "error";
-		log.error(`Failed to join room ${data.roomCode}:`, error);
-		if (callback && !callback.handled) {
-			callback(error);
-		}
-	}
-});
+export interface BoardCell {
+	slot: string;
+	colors: string;
+	name: string;
+}
 
-nodecg.listenFor("bingosync:leaveRoom", (_data, callback) => {
-	try {
-		clearInterval(fullUpdateInterval);
-		destroyWebsocket();
-		socketRep.value.status = "disconnected";
-		if (callback && !callback.handled) {
-			callback();
-		}
-	} catch (error) {
-		log.error("Failed to leave room:", error);
-		if (callback && !callback.handled) {
-			callback(error);
-		}
-	}
-});
+export interface BoardState {
+	cells: BoardCell[];
+}
 
-nodecg.listenFor("bingosync:selectLine", (lineString, callback) => {
-	try {
-		boardRep.value.selectedLine = lineString;
-		if (callback && !callback.handled) {
-			callback();
-		}
-	} catch (error) {
-		if (callback && !callback.handled) {
-			callback(error);
-		}
-	}
-});
+function computeLocalStorageKey(roomCode: string, playerName: string): string {
+	return `bingosync-api:socket-key:${playerName}:${roomCode}`;
+}
 
-nodecg.listenFor("bingosync:toggleLineFocus", (_data, callback) => {
-	try {
-		boardRep.value.lineFocused = !boardRep.value.lineFocused;
-		if (callback && !callback.handled) {
-			callback();
-		}
-	} catch (error) {
-		if (callback && !callback.handled) {
-			callback(error);
-		}
-	}
-});
+function loadCachedSocketKey(
+	roomCode: string,
+	playerName: string,
+): string | null {
+	return localStorage.getItem(computeLocalStorageKey(roomCode, playerName));
+}
 
-nodecg.listenFor("bingosync:toggleCard", (_data, callback) => {
-	try {
-		boardRep.value.cardHidden = !boardRep.value.cardHidden;
-		if (callback && !callback.handled) {
-			callback();
-		}
-	} catch (error) {
-		if (callback && !callback.handled) {
-			callback(error);
-		}
-	}
-});
-
-nodecg.listenFor("bingosync:toggleEmbiggen", (_data, callback) => {
-	try {
-		boardRep.value.embiggen = !boardRep.value.embiggen;
-		if (callback && !callback.handled) {
-			callback();
-		}
-	} catch (error) {
-		if (callback && !callback.handled) {
-			callback(error);
-		}
-	}
-});
-
-recover().catch(error => {
-	log.error(
-		`Failed to recover connection to room ${socketRep.value.roomCode}:`,
-		error,
+function saveSocketKey(
+	roomCode: string,
+	playerName: string,
+	socketKey: string,
+): void {
+	return localStorage.setItem(
+		computeLocalStorageKey(roomCode, playerName),
+		socketKey,
 	);
-});
-async function recover(): Promise<void> {
-	// Restore previous connection on startup.
-	if (socketRep.value.roomCode && socketRep.value.passphrase) {
-		log.info(`Recovering connection to room ${socketRep.value.roomCode}`);
-		await joinRoom(socketRep.value);
-		log.info(
-			`Successfully recovered connection to room ${socketRep.value.roomCode}`,
-		);
-	}
 }
 
-async function joinRoom({
-	siteUrl = "https://bingosync.com",
-	socketUrl = "wss://sockets.bingosync.com",
-	roomCode,
-	passphrase,
-	playerName = "NodeCG",
-}: {
-	siteUrl?: string;
-	socketUrl?: string;
-	roomCode: string;
-	passphrase: string;
-	playerName?: string;
-}): Promise<void> {
-	socketRep.value.status = "connecting";
-	clearInterval(fullUpdateInterval);
-	destroyWebsocket();
+async function getNewSocketKey(
+	params: Pick<
+		RoomJoinParameters,
+		"siteUrl" | "passphrase" | "playerName" | "roomCode"
+	>,
+): Promise<string> {
+	const roomUrl = new URL("/api/join-room", params.siteUrl);
+	const { socket_key } = await ky
+		.post(roomUrl, {
+			json: {
+				room: params.roomCode,
+				nickname: params.playerName,
+				password: params.passphrase,
 
-	log.info("Attempting to load room page.");
-	const roomUrl = `${siteUrl}/room/${roomCode}`;
-	let $ = await request({
-		uri: roomUrl,
-		transform(body, response) {
-			if (!String(response.statusCode).startsWith("2")) {
-				return body;
+				// we only support spectating at this time
+				is_spectator: true,
+			},
+		})
+		.json();
+	return socket_key;
+}
+
+type SocketStatus = "connecting" | "connected" | "disconnected" | "error";
+
+export class Bingosync extends EventEmitter {
+	/**
+	 * The current status of the socket connection to the target Bingosync room.
+	 */
+	readonly status: SocketStatus = "disconnected";
+
+	/**
+	 * The details of the current room connection.
+	 */
+	readonly roomParams: RoomJoinParameters;
+
+	/**
+	 * The state of the bingo board.
+	 */
+	boardState: BoardState;
+
+	/**
+	 * How frequently to do a full update of the board state from Bingosync's REST API.
+	 * These are done just to be extra paranoid and ensure that we don't miss things.
+	 */
+	fullUpdateIntervalTime = 15 * 1000;
+
+	private fullUpdateInterval: NodeJS.Timer;
+
+	private websocket: WebSocket | null = null;
+
+	/**
+	 * Joins a Bingosync room and subscribes to state changes from it.
+	 */
+	async joinRoom({
+		siteUrl = "https://bingosync.com",
+		socketUrl = "wss://sockets.bingosync.com",
+		roomCode,
+		passphrase,
+		playerName,
+	}: RoomJoinParameters): Promise<void> {
+		this.setStatus("connecting");
+		clearInterval(this.fullUpdateInterval);
+		this.destroyWebsocket();
+
+		let successfulSocketKey: string;
+		const cachedSocketKey = loadCachedSocketKey(roomCode, playerName);
+		if (cachedSocketKey) {
+			try {
+				// try cached key
+				successfulSocketKey = cachedSocketKey;
+			} catch (error) {
+				// get and use new key
+				successfulSocketKey = await getNewSocketKey({
+					siteUrl,
+					roomCode,
+					passphrase,
+					playerName,
+				});
 			}
-
-			return cheerio.load(body);
-		},
-	});
-
-	// If input[name="csrfmiddlewaretoken"] exists on the page, then we must be on the "Join Room" form.
-	// Else, we must be in the actual game room.
-	const csrfTokenInput = $('input[name="csrfmiddlewaretoken"]');
-	if (csrfTokenInput) {
-		log.info("Joining room...");
-
-		// POST to join the room.
-		await request({
-			method: "POST",
-			uri: roomUrl,
-			form: {
-				room_name: $('input[name="room_name"]').val(),
-				encoded_room_uuid: $('input[name="encoded_room_uuid"]').val(),
-				creator_name: $('input[name="creator_name"]').val(),
-				game_name: $('input[name="game_name"]').val(),
-				player_name: playerName,
+		} else {
+			// get and use new key
+			successfulSocketKey = await getNewSocketKey({
+				siteUrl,
+				roomCode,
 				passphrase,
-				csrfmiddlewaretoken: csrfTokenInput.val(),
-			},
-			headers: {
-				Referer: roomUrl,
-			},
-			resolveWithFullResponse: true,
-			simple: false,
-		});
+				playerName,
+			});
+		}
 
-		log.info("Joined room.");
-		log.info("Loading room page...");
+		saveSocketKey(roomCode, playerName, successfulSocketKey);
 
-		// Request the room page again, so that we can extract the socket token from it.
-		$ = await request({
-			uri: roomUrl,
-			transform(body, response) {
-				if (!String(response.statusCode).startsWith("2")) {
-					return body;
-				}
+		// save the room params so other methods can read them
+		(this as any).roomParams = {
+			siteUrl,
+			socketUrl,
+			roomCode,
+			passphrase,
+			playerName,
+		};
 
-				return cheerio.load(body);
-			},
-		});
+		this.setStatus("connected");
+
+		this.fullUpdateInterval = setInterval(() => {
+			this.fullUpdate().catch(error => {
+				debug("Failed to fullUpdate:", error);
+			});
+		}, this.fullUpdateIntervalTime);
+
+		await this.fullUpdate();
+		await this.createWebsocket(socketUrl, successfulSocketKey);
 	}
 
-	log.info("Loaded room page.");
-
-	// Socket stuff
-	const matches = $.html().match(SOCKET_KEY_REGEX);
-	if (!matches) {
-		log.error("Socket key not found on page.");
-		return;
+	disconnect(): void {
+		clearInterval(this.fullUpdateInterval);
+		this.destroyWebsocket();
+		this.setStatus("disconnected");
 	}
 
-	const socketKey = matches[1];
-	if (!socketKey) {
-		log.error("Socket key not found on page.");
-		return;
+	private setStatus(newStatus: SocketStatus): void {
+		(this as any).status = newStatus;
+		this.emit("status-changed", newStatus);
 	}
 
-	const thisInterval = setInterval(() => {
-		fullUpdate().catch(error => {
-			log.error("Failed to fullUpdate:", error);
-		});
-	}, 15 * 1000);
-	fullUpdateInterval = thisInterval;
+	async fullUpdate(): Promise<void> {
+		const requestedRoomCode = this.roomParams.roomCode;
+		const boardUrl = new URL(
+			`/room/${requestedRoomCode}/board`,
+			this.roomParams.siteUrl,
+		);
 
-	await fullUpdate();
-	await createWebsocket(socketUrl, socketKey);
-
-	async function fullUpdate(): Promise<void> {
-		const newBoardState = await request({
-			uri: `${roomUrl}/board`,
-			json: true,
-		});
+		const newBoardState = {
+			cells: await ky.get(boardUrl).json(),
+		};
 
 		// Bail if the room changed while this request was in-flight.
-		if (fullUpdateInterval !== thisInterval) {
+		if (requestedRoomCode !== this.roomParams.roomCode) {
 			return;
 		}
 
 		// Bail if nothing has changed.
-		if (equal(boardRep.value.cells, newBoardState)) {
+		if (equal(this.boardState, newBoardState)) {
 			return;
 		}
 
-		boardRep.value.cells = newBoardState;
+		this.boardState = newBoardState;
 	}
-}
 
-async function createWebsocket(
-	socketUrl: string,
-	socketKey: string,
-): Promise<void> {
-	return new Promise((resolve, reject) => {
-		let settled = false;
+	private async createWebsocket(
+		socketUrl: string,
+		socketKey: string,
+	): Promise<void> {
+		return new Promise((resolve, reject) => {
+			let settled = false;
 
-		log.info("Opening socket...");
-		socketRep.value.status = "connecting";
-		websocket = new WebSocket(`${socketUrl}/broadcast`);
+			debug("Opening socket...");
+			this.setStatus("connecting");
+			const broadcastUrl = new URL("/broadcast", socketUrl);
+			this.websocket = new WebSocket(broadcastUrl.href);
 
-		websocket.onopen = () => {
-			log.info("Socket opened.");
-			if (websocket) {
-				websocket.send(JSON.stringify({ socket_key: socketKey }));
-			}
-		};
-
-		websocket.onmessage = event => {
-			let json;
-			try {
-				json = JSON.parse(event.data as string);
-			} catch (_) {
-				log.error("Failed to parse message:", event.data);
-			}
-
-			if (json.type === "error") {
-				clearInterval(fullUpdateInterval);
-				destroyWebsocket();
-				socketRep.value.status = "error";
-				log.error(
-					"Socket protocol error:",
-					json.error ? json.error : json,
-				);
-				if (!settled) {
-					reject(
-						new Error(json.error ? json.error : "unknown error"),
+			this.websocket.onopen = () => {
+				debug("Socket opened.");
+				if (this.websocket) {
+					this.websocket.send(
+						JSON.stringify({ socket_key: socketKey }),
 					);
+				}
+			};
+
+			this.websocket.onmessage = event => {
+				let json;
+				try {
+					json = JSON.parse(event.data as string);
+				} catch (_) {
+					debug("Failed to parse message:", event.data);
+				}
+
+				if (json.type === "error") {
+					clearInterval(this.fullUpdateInterval);
+					this.destroyWebsocket();
+					this.setStatus("error");
+					debug(
+						"Socket protocol error:",
+						json.error ? json.error : json,
+					);
+					if (!settled) {
+						reject(
+							new Error(
+								json.error ? json.error : "unknown error",
+							),
+						);
+						settled = true;
+					}
+
+					return;
+				}
+
+				if (!settled) {
+					resolve();
+					this.setStatus("connected");
 					settled = true;
 				}
 
-				return;
-			}
+				if (json.type === "goal") {
+					const index = parseInt(json.square.slot.slice(4), 10) - 1;
+					this.boardState.cells[index] = json.square;
+				}
+			};
 
-			if (!settled) {
-				resolve();
-				socketRep.value.status = "connected";
-				settled = true;
-			}
-
-			if (json.type === "goal") {
-				const index = parseInt(json.square.slot.slice(4), 10) - 1;
-				boardRep.value.cells[index] = json.square;
-			}
-		};
-
-		websocket.onclose = event => {
-			socketRep.value.status = "disconnected";
-			log.info(
-				`Socket closed (code: ${event.code}, reason: ${event.reason})`,
-			);
-			destroyWebsocket();
-			createWebsocket(socketUrl, socketKey).catch(() => {
-				// Intentionally discard errors raised here.
-				// They will have already been logged in the onmessage handler.
-			});
-		};
-	});
-}
-
-function destroyWebsocket(): void {
-	if (!websocket) {
-		return;
+			this.websocket.onclose = event => {
+				this.setStatus("disconnected");
+				debug(
+					`Socket closed (code: ${event.code}, reason: ${event.reason})`,
+				);
+				this.destroyWebsocket();
+				this.createWebsocket(socketUrl, socketKey).catch(() => {
+					// Intentionally discard errors raised here.
+					// They will have already been logged in the onmessage handler.
+				});
+			};
+		});
 	}
 
-	try {
-		websocket.onopen = () => {};
-		websocket.onmessage = () => {};
-		websocket.onclose = () => {};
-		websocket.close();
-	} catch (_) {
-		// Intentionally discard error.
-	}
+	private destroyWebsocket(): void {
+		if (!this.websocket) {
+			return;
+		}
 
-	websocket = null;
+		try {
+			this.websocket.onopen = () => {};
+			this.websocket.onmessage = () => {};
+			this.websocket.onclose = () => {};
+			this.websocket.close();
+		} catch (_) {
+			// Intentionally discard error.
+		}
+
+		this.websocket = null;
+	}
 }

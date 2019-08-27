@@ -68,10 +68,6 @@ test("emits an event when the board changes", async () => {
 	fetchMock.done();
 });
 
-test(
-	"saves the socket_key to localstorage and keeps it through page refreshes/server restarts",
-);
-
 test("supports connecting to alternate deployments of bingosync", async () => {
 	const siteUrl = "http://fake.example.com";
 	const socketUrl = "ws://localhost:9999";
