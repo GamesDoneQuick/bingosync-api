@@ -8,7 +8,7 @@ const defaultValues = {
 	roomPassword: "4321fdsa",
 	wrongPassword: "wrong",
 	nickname: "qwer5678",
-	socket_key: "socket_key_for_me",
+	socketKey: "socket_key_for_me",
 	siteUrl: "https://bingosync.com",
 	socketUrl: "ws://localhost:8080",
 };
@@ -74,7 +74,8 @@ function setupRoomJoinMock({
 		{
 			status: 200,
 			body: {
-				socket_key: defaultValues.socket_key,
+				// eslint-disable-next-line @typescript-eslint/camelcase
+				socket_key: defaultValues.socketKey,
 			},
 		},
 		{
@@ -123,7 +124,7 @@ function setupSocketJoinMock({ socketUrl = defaultValues.socketUrl } = {}): {
 	};
 }
 
-function deauthorizeAllSockets(server: Server) {
+function deauthorizeAllSockets(server: Server): void {
 	server.clients().forEach(socket => {
 		socket.send(
 			JSON.stringify({
@@ -134,10 +135,10 @@ function deauthorizeAllSockets(server: Server) {
 	});
 }
 
-export function done() {
+export function done(): void {
 	fetchMock.done();
 }
 
-export function reset() {
+export function reset(): void {
 	fetchMock.reset();
 }

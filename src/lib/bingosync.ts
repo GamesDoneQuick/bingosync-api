@@ -57,19 +57,21 @@ async function getNewSocketKey(
 	>,
 ): Promise<string> {
 	const roomUrl = new URL("/api/join-room", params.siteUrl);
-	const { socket_key } = await ky
+	const response = await ky
 		.post(roomUrl, {
+			/* eslint-disable @typescript-eslint/camelcase */
 			json: {
 				room: params.roomCode,
 				nickname: params.playerName,
 				password: params.passphrase,
 
-				// we only support spectating at this time
+				// We only support spectating at this time
 				is_spectator: true,
 			},
+			/* eslint-enable @typescript-eslint/camelcase */
 		})
 		.json();
-	return socket_key;
+	return response.socket_key;
 }
 
 type SocketStatus = "connecting" | "connected" | "disconnected" | "error";
@@ -96,9 +98,9 @@ export class Bingosync extends EventEmitter {
 	 */
 	fullUpdateIntervalTime = 15 * 1000;
 
-	private fullUpdateInterval: NodeJS.Timer;
+	private _fullUpdateInterval: NodeJS.Timer;
 
-	private websocket: WebSocket | null = null;
+	private _websocket: WebSocket | null = null;
 
 	/**
 	 * Joins a Bingosync room and subscribes to state changes from it.
@@ -110,18 +112,18 @@ export class Bingosync extends EventEmitter {
 		passphrase,
 		playerName,
 	}: RoomJoinParameters): Promise<void> {
-		this.setStatus("connecting");
-		clearInterval(this.fullUpdateInterval);
-		this.destroyWebsocket();
+		this._setStatus("connecting");
+		clearInterval(this._fullUpdateInterval);
+		this._destroyWebsocket();
 
 		let successfulSocketKey: string;
 		const cachedSocketKey = loadCachedSocketKey(roomCode, playerName);
 		if (cachedSocketKey) {
 			try {
-				// try cached key
+				// Try cached key
 				successfulSocketKey = cachedSocketKey;
-			} catch (error) {
-				// get and use new key
+			} catch (_) {
+				// Get and use new key
 				successfulSocketKey = await getNewSocketKey({
 					siteUrl,
 					roomCode,
@@ -130,7 +132,7 @@ export class Bingosync extends EventEmitter {
 				});
 			}
 		} else {
-			// get and use new key
+			// Get and use new key
 			successfulSocketKey = await getNewSocketKey({
 				siteUrl,
 				roomCode,
@@ -141,7 +143,8 @@ export class Bingosync extends EventEmitter {
 
 		saveSocketKey(roomCode, playerName, successfulSocketKey);
 
-		// save the room params so other methods can read them
+		// Save the room params so other methods can read them
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
 		(this as any).roomParams = {
 			siteUrl,
 			socketUrl,
@@ -150,30 +153,30 @@ export class Bingosync extends EventEmitter {
 			playerName,
 		};
 
-		this.setStatus("connected");
+		this._setStatus("connected");
 
-		this.fullUpdateInterval = setInterval(() => {
-			this.fullUpdate().catch(error => {
+		this._fullUpdateInterval = setInterval(() => {
+			this._fullUpdate().catch(error => {
 				debug("Failed to fullUpdate:", error);
 			});
 		}, this.fullUpdateIntervalTime);
 
-		await this.fullUpdate();
-		await this.createWebsocket(socketUrl, successfulSocketKey);
+		await this._fullUpdate();
+		await this._createWebsocket(socketUrl, successfulSocketKey);
 	}
 
 	disconnect(): void {
-		clearInterval(this.fullUpdateInterval);
-		this.destroyWebsocket();
-		this.setStatus("disconnected");
+		clearInterval(this._fullUpdateInterval);
+		this._destroyWebsocket();
+		this._setStatus("disconnected");
 	}
 
-	private setStatus(newStatus: SocketStatus): void {
-		(this as any).status = newStatus;
+	private _setStatus(newStatus: SocketStatus): void {
+		(this as any).status = newStatus; // eslint-disable-line @typescript-eslint/no-explicit-any
 		this.emit("status-changed", newStatus);
 	}
 
-	async fullUpdate(): Promise<void> {
+	private async _fullUpdate(): Promise<void> {
 		const requestedRoomCode = this.roomParams.roomCode;
 		const boardUrl = new URL(
 			`/room/${requestedRoomCode}/board`,
@@ -197,7 +200,7 @@ export class Bingosync extends EventEmitter {
 		this.boardState = newBoardState;
 	}
 
-	private async createWebsocket(
+	private async _createWebsocket(
 		socketUrl: string,
 		socketKey: string,
 	): Promise<void> {
@@ -205,20 +208,24 @@ export class Bingosync extends EventEmitter {
 			let settled = false;
 
 			debug("Opening socket...");
-			this.setStatus("connecting");
+			this._setStatus("connecting");
 			const broadcastUrl = new URL("/broadcast", socketUrl);
-			this.websocket = new WebSocket(broadcastUrl.href);
+			this._websocket = new WebSocket(broadcastUrl.href);
 
-			this.websocket.onopen = () => {
+			this._websocket.onopen = () => {
 				debug("Socket opened.");
-				if (this.websocket) {
-					this.websocket.send(
-						JSON.stringify({ socket_key: socketKey }),
+				if (this._websocket) {
+					this._websocket.send(
+						/* eslint-disable @typescript-eslint/camelcase */
+						JSON.stringify({
+							socket_key: socketKey,
+						}),
+						/* eslint-enable @typescript-eslint/camelcase */
 					);
 				}
 			};
 
-			this.websocket.onmessage = event => {
+			this._websocket.onmessage = event => {
 				let json;
 				try {
 					json = JSON.parse(event.data as string);
@@ -227,9 +234,9 @@ export class Bingosync extends EventEmitter {
 				}
 
 				if (json.type === "error") {
-					clearInterval(this.fullUpdateInterval);
-					this.destroyWebsocket();
-					this.setStatus("error");
+					clearInterval(this._fullUpdateInterval);
+					this._destroyWebsocket();
+					this._setStatus("error");
 					debug(
 						"Socket protocol error:",
 						json.error ? json.error : json,
@@ -248,7 +255,7 @@ export class Bingosync extends EventEmitter {
 
 				if (!settled) {
 					resolve();
-					this.setStatus("connected");
+					this._setStatus("connected");
 					settled = true;
 				}
 
@@ -258,13 +265,13 @@ export class Bingosync extends EventEmitter {
 				}
 			};
 
-			this.websocket.onclose = event => {
-				this.setStatus("disconnected");
+			this._websocket.onclose = event => {
+				this._setStatus("disconnected");
 				debug(
 					`Socket closed (code: ${event.code}, reason: ${event.reason})`,
 				);
-				this.destroyWebsocket();
-				this.createWebsocket(socketUrl, socketKey).catch(() => {
+				this._destroyWebsocket();
+				this._createWebsocket(socketUrl, socketKey).catch(() => {
 					// Intentionally discard errors raised here.
 					// They will have already been logged in the onmessage handler.
 				});
@@ -272,20 +279,20 @@ export class Bingosync extends EventEmitter {
 		});
 	}
 
-	private destroyWebsocket(): void {
-		if (!this.websocket) {
+	private _destroyWebsocket(): void {
+		if (!this._websocket) {
 			return;
 		}
 
 		try {
-			this.websocket.onopen = () => {};
-			this.websocket.onmessage = () => {};
-			this.websocket.onclose = () => {};
-			this.websocket.close();
+			this._websocket.onopen = () => {};
+			this._websocket.onmessage = () => {};
+			this._websocket.onclose = () => {};
+			this._websocket.close();
 		} catch (_) {
 			// Intentionally discard error.
 		}
 
-		this.websocket = null;
+		this._websocket = null;
 	}
 }

@@ -1,5 +1,5 @@
 import { Bingosync } from "../index";
-import { expect } from "chai";
+import chai, { expect } from "chai";
 import chaiAsPromised from "chai-as-promised";
 import * as fetchMock from "./mocks";
 

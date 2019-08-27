@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-var-requires */
 import { LocalStorage as LSType } from "node-localstorage";
 
 let localStorage: LSType | Storage;
