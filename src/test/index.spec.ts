@@ -3,6 +3,7 @@ import * as fetchMock from "./mocks"; // This must come first.
 import { WebSocket as MockWebSocket } from "mock-socket";
 import { use, expect } from "chai";
 import * as chaiAsPromised from "chai-as-promised";
+import * as cuid from "cuid";
 
 // Ours
 import { Bingosync } from "../index";
@@ -13,6 +14,7 @@ let client: Bingosync;
 
 beforeEach(() => {
 	client = new Bingosync();
+	client.localStoragePrefix = cuid();
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	(client as any).WebSocketClass = MockWebSocket;
 });
@@ -29,10 +31,10 @@ it.only("joins the room and socket", async () => {
 	fetchMock.done();
 });
 
-it("rejects when using the wrong password", async () => {
+it.only("rejects when using the wrong password", async () => {
 	const roomParams = fetchMock.setup.joinRoom({ rejectPassword: true });
-	await expect(client.joinRoom(roomParams)).to.eventually.throw(
-		"Incorrect Password",
+	await expect(client.joinRoom(roomParams)).to.eventually.be.rejectedWith(
+		"Bad Request",
 	);
 	fetchMock.done();
 });

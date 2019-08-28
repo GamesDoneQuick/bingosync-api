@@ -28,28 +28,6 @@ export interface BoardState {
 	cells: BoardCell[];
 }
 
-function computeLocalStorageKey(roomCode: string, playerName: string): string {
-	return `bingosync-api:socket-key:${playerName}:${roomCode}`;
-}
-
-function loadCachedSocketKey(
-	roomCode: string,
-	playerName: string,
-): string | null {
-	return localStorage.getItem(computeLocalStorageKey(roomCode, playerName));
-}
-
-function saveSocketKey(
-	roomCode: string,
-	playerName: string,
-	socketKey: string,
-): void {
-	return localStorage.setItem(
-		computeLocalStorageKey(roomCode, playerName),
-		socketKey,
-	);
-}
-
 async function getNewSocketKey(
 	params: Pick<
 		RoomJoinParameters,
@@ -122,6 +100,13 @@ export class Bingosync extends EventEmitter {
 	 */
 	WebSocketClass = WebSocket;
 
+	/**
+	 * A string to prepend to all localstorage keys.
+	 * Shouldn't be necessary to change this for prod,
+	 * but we have to change it for testing.
+	 */
+	localStoragePrefix = "bingosync-api";
+
 	private _fullUpdateInterval: NodeJS.Timer;
 
 	private _websocket: WebSocket | null = null;
@@ -141,11 +126,12 @@ export class Bingosync extends EventEmitter {
 		this._destroyWebsocket();
 
 		let successfulSocketKey: string;
-		const cachedSocketKey = loadCachedSocketKey(roomCode, playerName);
+		const cachedSocketKey = this._loadCachedSocketKey(playerName, roomCode);
 		if (cachedSocketKey) {
 			try {
 				// Try cached key
 				successfulSocketKey = cachedSocketKey;
+				// TODO: this isn't trying, it's just using it
 			} catch (_) {
 				// Get and use new key
 				successfulSocketKey = await getNewSocketKey({
@@ -165,7 +151,7 @@ export class Bingosync extends EventEmitter {
 			});
 		}
 
-		saveSocketKey(roomCode, playerName, successfulSocketKey);
+		this._saveSocketKey(successfulSocketKey, playerName, roomCode);
 
 		// Save the room params so other methods can read them
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -234,7 +220,6 @@ export class Bingosync extends EventEmitter {
 			debug("Opening socket...");
 			this._setStatus("connecting");
 			const broadcastUrl = new URL("/broadcast", socketUrl);
-			console.log("connecting to:", broadcastUrl.href);
 			this._websocket = new this.WebSocketClass(broadcastUrl.href);
 
 			this._websocket.onopen = () => {
@@ -319,5 +304,32 @@ export class Bingosync extends EventEmitter {
 		}
 
 		this._websocket = null;
+	}
+
+	private _computeLocalStorageKey(
+		playerName: string,
+		roomCode: string,
+	): string {
+		return `${this.localStoragePrefix}:socket-key:${playerName}:${roomCode}`;
+	}
+
+	private _loadCachedSocketKey(
+		playerName: string,
+		roomCode: string,
+	): string | null {
+		return localStorage.getItem(
+			this._computeLocalStorageKey(playerName, roomCode),
+		);
+	}
+
+	private _saveSocketKey(
+		socketKey: string,
+		playerName: string,
+		roomCode: string,
+	): void {
+		return localStorage.setItem(
+			this._computeLocalStorageKey(playerName, roomCode),
+			socketKey,
+		);
 	}
 }

@@ -1,6 +1,7 @@
 import * as fetchMock from "fetch-mock";
 import { Server } from "mock-socket";
 import * as deepEql from "fast-deep-equal";
+import cuid = require("cuid");
 
 // Annoying hack which requires calling a private method of fetchMock
 // to make it work with the way that ky caches its reference to `global.fetch`.
@@ -10,11 +11,11 @@ import * as deepEql from "fast-deep-equal";
 import { RoomJoinParameters } from "../index";
 
 const defaultValues = {
-	roomId: "asdf1234",
-	roomPassword: "4321fdsa",
-	wrongPassword: "wrong",
-	nickname: "qwer5678",
-	socketKey: "socket_key_for_me",
+	roomId: cuid(),
+	roomPassword: cuid(),
+	wrongPassword: cuid(),
+	nickname: cuid(),
+	socketKey: cuid(),
 	siteUrl: "https://bingosync.com",
 	socketUrl: "ws://localhost:8080",
 };
@@ -119,9 +120,8 @@ function setupSocketJoinMock({ socketUrl = defaultValues.socketUrl } = {}): {
 } {
 	const socketJoinOptions = {
 		socketUrl,
-		socketKey: "socket_key_for_me",
+		socketKey: defaultValues.socketKey,
 	};
-	console.log("mocking server at:", `${socketUrl}/broadcast`);
 	const mockServer = new Server(`${socketUrl}/broadcast`);
 
 	mockServer.on("connection", socket => {
