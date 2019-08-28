@@ -2,8 +2,8 @@
 import ky from "ky-universal";
 import * as WebSocket from "isomorphic-ws";
 import dbg from "debug";
-import EventEmitter from "eventemitter3";
-import equal from "fast-deep-equal";
+import { EventEmitter } from "eventemitter3";
+import * as equal from "fast-deep-equal";
 
 // Ours
 import localStorage from "./isomorphic-localstorage";
@@ -57,9 +57,9 @@ async function getNewSocketKey(
 	>,
 ): Promise<string> {
 	const roomUrl = new URL("/api/join-room", params.siteUrl);
+	/* eslint-disable @typescript-eslint/camelcase */
 	const response = await ky
 		.post(roomUrl, {
-			/* eslint-disable @typescript-eslint/camelcase */
 			json: {
 				room: params.roomCode,
 				nickname: params.playerName,
@@ -68,9 +68,26 @@ async function getNewSocketKey(
 				// We only support spectating at this time
 				is_spectator: true,
 			},
-			/* eslint-enable @typescript-eslint/camelcase */
+			hooks: {
+				afterResponse: [
+					// Ky throws an error when a POST gets a redirect response,
+					// but that's what bingosync actually does.
+					// So, we have to use a response hook to work around this and prevent
+					// ky from throwing an exception.
+					// eslint-disable-next-line @typescript-eslint/promise-function-async
+					response => {
+						const location = response.headers.get("Location");
+						if (!location) {
+							return response;
+						}
+
+						return ky.get(location);
+					},
+				],
+			},
 		})
-		.json();
+		.json<{ socket_key: string }>();
+	/* eslint-enable @typescript-eslint/camelcase */
 	return response.socket_key;
 }
 
@@ -97,6 +114,13 @@ export class Bingosync extends EventEmitter {
 	 * These are done just to be extra paranoid and ensure that we don't miss things.
 	 */
 	fullUpdateIntervalTime = 15 * 1000;
+
+	/**
+	 * The constructor to use when creating a WebSocket.
+	 * We have to change this in tests, but it shouldn't
+	 * need to be changed in prod.
+	 */
+	WebSocketClass = WebSocket;
 
 	private _fullUpdateInterval: NodeJS.Timer;
 
@@ -184,7 +208,7 @@ export class Bingosync extends EventEmitter {
 		);
 
 		const newBoardState = {
-			cells: await ky.get(boardUrl).json(),
+			cells: await ky.get(boardUrl).json<BoardCell[]>(),
 		};
 
 		// Bail if the room changed while this request was in-flight.
@@ -210,7 +234,8 @@ export class Bingosync extends EventEmitter {
 			debug("Opening socket...");
 			this._setStatus("connecting");
 			const broadcastUrl = new URL("/broadcast", socketUrl);
-			this._websocket = new WebSocket(broadcastUrl.href);
+			console.log("connecting to:", broadcastUrl.href);
+			this._websocket = new this.WebSocketClass(broadcastUrl.href);
 
 			this._websocket.onopen = () => {
 				debug("Socket opened.");

@@ -1,6 +1,12 @@
-import fetchMock from "fetch-mock";
+import * as fetchMock from "fetch-mock";
 import { Server } from "mock-socket";
-import deepEql from "fast-deep-equal";
+import * as deepEql from "fast-deep-equal";
+
+// Annoying hack which requires calling a private method of fetchMock
+// to make it work with the way that ky caches its reference to `global.fetch`.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+(fetchMock as any)._mock();
+
 import { RoomJoinParameters } from "../index";
 
 const defaultValues = {
@@ -12,6 +18,8 @@ const defaultValues = {
 	siteUrl: "https://bingosync.com",
 	socketUrl: "ws://localhost:8080",
 };
+
+let mockServers: Server[] = [];
 
 export const setup = {
 	joinRoom: setupRoomJoinMock,
@@ -32,17 +40,30 @@ function setupRoomJoinMock({
 > {
 	const roomOptions = {
 		siteUrl,
+		socketUrl: defaultValues.socketUrl,
 		roomCode: defaultValues.roomId,
 		playerName: defaultValues.nickname,
 		passphrase: defaultValues.roomPassword,
 	};
 
+	const getSocketKeyUrl = `${siteUrl}/api/get-socket-key/${defaultValues.roomId}`;
+
 	fetchMock.post(
 		(url, options) => {
-			return (
-				url === `${siteUrl}/api/join-room` &&
-				deepEql(options.body, roomOptions)
-			);
+			if (typeof options.body !== "string") {
+				return false;
+			}
+
+			const urlMatches = url === `${siteUrl}/api/join-room`;
+			const bodyMatches = deepEql(JSON.parse(options.body), {
+				/* eslint-disable @typescript-eslint/camelcase */
+				room: roomOptions.roomCode,
+				nickname: roomOptions.playerName,
+				password: roomOptions.passphrase,
+				is_spectator: true,
+				/* eslint-enable @typescript-eslint/camelcase */
+			});
+			return urlMatches && bodyMatches;
 		},
 		rejectPassword
 			? {
@@ -58,10 +79,10 @@ function setupRoomJoinMock({
 					},
 			  }
 			: {
-					status: 301,
-					body: {
+					status: 302,
+					headers: {
 						// Yep, a success here results in a redirect to another endpoint.
-						Location: `${siteUrl}/api/get-socket-key/${defaultValues.roomId}`,
+						Location: getSocketKeyUrl,
 					},
 			  },
 		{
@@ -70,7 +91,7 @@ function setupRoomJoinMock({
 	);
 
 	fetchMock.get(
-		`/api/get-socket-key/${defaultValues.roomId}`,
+		getSocketKeyUrl,
 		{
 			status: 200,
 			body: {
@@ -82,6 +103,11 @@ function setupRoomJoinMock({
 			repeat,
 		},
 	);
+
+	fetchMock.get(`${siteUrl}/room/${roomOptions.roomCode}/board`, {
+		status: 200,
+		body: [],
+	});
 
 	return roomOptions;
 }
@@ -95,6 +121,7 @@ function setupSocketJoinMock({ socketUrl = defaultValues.socketUrl } = {}): {
 		socketUrl,
 		socketKey: "socket_key_for_me",
 	};
+	console.log("mocking server at:", `${socketUrl}/broadcast`);
 	const mockServer = new Server(`${socketUrl}/broadcast`);
 
 	mockServer.on("connection", socket => {
@@ -104,9 +131,14 @@ function setupSocketJoinMock({ socketUrl = defaultValues.socketUrl } = {}): {
 			}
 
 			const parsedData = JSON.parse(data);
-			if (parsedData.socketKey === socketJoinOptions.socketKey) {
+			if (parsedData.socket_key === socketJoinOptions.socketKey) {
 				// This isn't what bingosync would actually send, but it's good enough for our test.
-				socket.send("SUCCESS");
+				socket.send(
+					JSON.stringify({
+						type: "made_up",
+						message: "SUCCESS",
+					}),
+				);
 			} else {
 				socket.send(
 					JSON.stringify({
@@ -117,6 +149,8 @@ function setupSocketJoinMock({ socketUrl = defaultValues.socketUrl } = {}): {
 			}
 		});
 	});
+
+	mockServers.push(mockServer);
 
 	return {
 		...socketJoinOptions,
@@ -141,4 +175,8 @@ export function done(): void {
 
 export function reset(): void {
 	fetchMock.reset();
+	mockServers.forEach(server => {
+		server.stop();
+	});
+	mockServers = [];
 }

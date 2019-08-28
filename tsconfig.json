@@ -16,7 +16,8 @@
 		"suppressImplicitAnyIndexErrors": true,
 		"noUnusedLocals": true,
 		"declaration": true,
-		"allowSyntheticDefaultImports": true
+		"allowSyntheticDefaultImports": false,
+		"target": "ES6"
 	},
 	"include": ["src/**/*"],
 	"exclude": ["node_modules", "build", "scripts"]
