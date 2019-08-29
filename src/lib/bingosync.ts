@@ -10,6 +10,23 @@ import localStorage from "./isomorphic-localstorage";
 
 const debug = dbg("bingosync-api");
 
+interface Events {
+	"status-changed": [string];
+	"board-changed": [BoardState];
+}
+
+export type CellColor =
+	| "orange"
+	| "red"
+	| "blue"
+	| "green"
+	| "purple"
+	| "navy"
+	| "teal"
+	| "brown"
+	| "pink"
+	| "yellow";
+
 export interface RoomJoinParameters {
 	roomCode: string;
 	playerName: string;
@@ -20,13 +37,19 @@ export interface RoomJoinParameters {
 
 export interface BoardCell {
 	slot: string;
-	colors: string;
+	colors: CellColor[];
 	name: string;
 }
 
 export interface BoardState {
 	cells: BoardCell[];
 }
+
+type RawBoardState = Array<{
+	colors: string;
+	slot: string;
+	name: string;
+}>;
 
 async function getNewSocketKey(
 	params: Pick<
@@ -70,8 +93,7 @@ async function getNewSocketKey(
 }
 
 type SocketStatus = "connecting" | "connected" | "disconnected" | "error";
-
-export class Bingosync extends EventEmitter {
+export class Bingosync extends EventEmitter<Events> {
 	/**
 	 * The current status of the socket connection to the target Bingosync room.
 	 */
@@ -196,14 +218,15 @@ export class Bingosync extends EventEmitter {
 			this.roomParams.siteUrl,
 		);
 
-		const newBoardState = {
-			cells: await ky.get(boardUrl).json<BoardCell[]>(),
-		};
+		const rawBoardState = await ky.get(boardUrl).json<RawBoardState>();
 
 		// Bail if the room changed while this request was in-flight.
 		if (requestedRoomCode !== this.roomParams.roomCode) {
 			return;
 		}
+
+		// Make the raw data a bit more pleasant to work with.
+		const newBoardState = this._processRawBoardState(rawBoardState);
 
 		// Bail if nothing has changed.
 		if (equal(this.boardState, newBoardState)) {
@@ -211,6 +234,21 @@ export class Bingosync extends EventEmitter {
 		}
 
 		this.boardState = newBoardState;
+		this.emit("board-changed", this.boardState);
+	}
+
+	private _processRawBoardState(rawBoardState: RawBoardState): BoardState {
+		return {
+			cells: rawBoardState.map(rawCell => {
+				return {
+					colors: rawCell.colors.split(" ").filter(color => {
+						return color.toLowerCase() !== "blank";
+					}) as CellColor[],
+					slot: rawCell.slot,
+					name: rawCell.name,
+				};
+			}),
+		};
 	}
 
 	private async _createWebsocket(
@@ -314,6 +352,7 @@ export class Bingosync extends EventEmitter {
 				if (json.type === "goal") {
 					const index = parseInt(json.square.slot.slice(4), 10) - 1;
 					this.boardState.cells[index] = json.square;
+					this.emit("board-changed", this.boardState);
 				}
 			};
 
