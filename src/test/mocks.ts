@@ -2,29 +2,17 @@ import * as fetchMock from "fetch-mock";
 import { Server } from "mock-socket";
 import * as deepEql from "fast-deep-equal";
 import cuid = require("cuid");
+import { expect } from "chai";
 
 // Annoying hack which requires calling a private method of fetchMock
 // to make it work with the way that ky caches its reference to `global.fetch`.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (fetchMock as any)._mock();
 
-import { RoomJoinParameters } from "../index";
-
-const defaultValues = {
-	roomId: cuid(),
-	roomPassword: cuid(),
-	wrongPassword: cuid(),
-	nickname: cuid(),
-	socketKey: cuid(),
-	siteUrl: "https://bingosync.com",
-	socketUrl: "ws://localhost:8080",
-};
-
 let mockServers: Server[] = [];
 
 export const setup = {
 	joinRoom: setupRoomJoinMock,
-	joinSocket: setupSocketJoinMock,
 };
 
 export const actions = {
@@ -32,22 +20,34 @@ export const actions = {
 };
 
 function setupRoomJoinMock({
-	siteUrl = defaultValues.siteUrl,
+	siteUrl = "https://bingosync.com",
+	socketUrl = "ws://localhost:8080",
+	roomCode = cuid(),
+	playerName = cuid(),
+	passphrase = cuid(),
 	repeat = 1,
 	rejectPassword = false,
-} = {}): Pick<
-	RoomJoinParameters,
-	"siteUrl" | "roomCode" | "playerName" | "passphrase"
-> {
+	createSocketServer = true,
+	createFullUpdateRoute = true,
+} = {}): {
+	siteUrl: string;
+	socketUrl: string;
+	socketKey: string;
+	roomCode: string;
+	playerName: string;
+	passphrase: string;
+	socketServer?: Server;
+} {
 	const roomOptions = {
 		siteUrl,
-		socketUrl: defaultValues.socketUrl,
-		roomCode: defaultValues.roomId,
-		playerName: defaultValues.nickname,
-		passphrase: defaultValues.roomPassword,
+		socketUrl,
+		socketKey: cuid(),
+		roomCode,
+		playerName,
+		passphrase,
 	};
 
-	const getSocketKeyUrl = `${siteUrl}/api/get-socket-key/${defaultValues.roomId}`;
+	const getSocketKeyUrl = `${siteUrl}/api/get-socket-key/${roomOptions.roomCode}`;
 
 	fetchMock.post(
 		(url, options) => {
@@ -91,13 +91,17 @@ function setupRoomJoinMock({
 		},
 	);
 
+	if (rejectPassword) {
+		return roomOptions;
+	}
+
 	fetchMock.get(
 		getSocketKeyUrl,
 		{
 			status: 200,
 			body: {
 				// eslint-disable-next-line @typescript-eslint/camelcase
-				socket_key: defaultValues.socketKey,
+				socket_key: roomOptions.socketKey,
 			},
 		},
 		{
@@ -105,25 +109,38 @@ function setupRoomJoinMock({
 		},
 	);
 
-	fetchMock.get(`${siteUrl}/room/${roomOptions.roomCode}/board`, {
-		status: 200,
-		body: [],
-	});
+	if (createFullUpdateRoute) {
+		fetchMock.get(`${siteUrl}/room/${roomOptions.roomCode}/board`, {
+			status: 200,
+			body: [],
+		});
+	}
+
+	if (createSocketServer) {
+		const socketServer = setupSocketJoinMock({
+			socketUrl: roomOptions.socketUrl,
+			socketKey: roomOptions.socketKey,
+		});
+
+		return {
+			...roomOptions,
+			socketServer,
+		};
+	}
 
 	return roomOptions;
 }
 
-function setupSocketJoinMock({ socketUrl = defaultValues.socketUrl } = {}): {
+function setupSocketJoinMock({
+	socketUrl,
+	socketKey,
+}: {
 	socketUrl: string;
 	socketKey: string;
-	server: Server;
-} {
-	const socketJoinOptions = {
-		socketUrl,
-		socketKey: defaultValues.socketKey,
-	};
+}): Server {
 	const mockServer = new Server(`${socketUrl}/broadcast`);
 
+	let currentSocketKey = socketKey;
 	mockServer.on("connection", socket => {
 		socket.on("message", data => {
 			if (typeof data !== "string") {
@@ -131,7 +148,7 @@ function setupSocketJoinMock({ socketUrl = defaultValues.socketUrl } = {}): {
 			}
 
 			const parsedData = JSON.parse(data);
-			if (parsedData.socket_key === socketJoinOptions.socketKey) {
+			if (parsedData.socket_key === currentSocketKey) {
 				// This isn't what bingosync would actually send, but it's good enough for our test.
 				socket.send(
 					JSON.stringify({
@@ -150,12 +167,14 @@ function setupSocketJoinMock({ socketUrl = defaultValues.socketUrl } = {}): {
 		});
 	});
 
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	(mockServer as any).setKey = (newKey: string): void => {
+		currentSocketKey = newKey;
+	};
+
 	mockServers.push(mockServer);
 
-	return {
-		...socketJoinOptions,
-		server: mockServer,
-	};
+	return mockServer;
 }
 
 function deauthorizeAllSockets(server: Server): void {
@@ -169,12 +188,16 @@ function deauthorizeAllSockets(server: Server): void {
 	});
 }
 
-export function done(): void {
-	fetchMock.done();
+export function verify(): void {
+	expect(fetchMock.done()).to.equal(true);
 }
 
 export function reset(): void {
 	fetchMock.reset();
+}
+
+export function end(): void {
+	reset();
 	mockServers.forEach(server => {
 		server.stop();
 	});

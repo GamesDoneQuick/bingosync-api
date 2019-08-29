@@ -107,9 +107,27 @@ export class Bingosync extends EventEmitter {
 	 */
 	localStoragePrefix = "bingosync-api";
 
+	/**
+	 * How many times to attempt to authenticate with the socket
+	 * before giving up and emitting an "error" event.
+	 */
+	maxSocketAuthAttempts = 3;
+
+	/**
+	 * A reference to the setInterval for performing full updates,
+	 * which are used to fill in any gaps caused by missed socket packets.
+	 */
 	private _fullUpdateInterval: NodeJS.Timer;
 
+	/**
+	 * A reference to the websocket client instance currently being used, if any.
+	 */
 	private _websocket: WebSocket | null = null;
+
+	/**
+	 * How many socket auth attempts we have tried in the current iteration.
+	 */
+	private _numSocketAuthAttempts = 0;
 
 	/**
 	 * Joins a Bingosync room and subscribes to state changes from it.
@@ -125,33 +143,18 @@ export class Bingosync extends EventEmitter {
 		clearInterval(this._fullUpdateInterval);
 		this._destroyWebsocket();
 
-		let successfulSocketKey: string;
-		const cachedSocketKey = this._loadCachedSocketKey(playerName, roomCode);
-		if (cachedSocketKey) {
-			try {
-				// Try cached key
-				successfulSocketKey = cachedSocketKey;
-				// TODO: this isn't trying, it's just using it
-			} catch (_) {
-				// Get and use new key
-				successfulSocketKey = await getNewSocketKey({
-					siteUrl,
-					roomCode,
-					passphrase,
-					playerName,
-				});
-			}
-		} else {
-			// Get and use new key
-			successfulSocketKey = await getNewSocketKey({
+		// It might seem spooky that we're not validating the cached socket key here.
+		// It's okay though, because the _createWebSocket method creates an error handler
+		// which will detect an expired key, and automatically request a fresh one.
+		// So, we don't need to worry too much about checking if our saved key is expired here.
+		const socketKey =
+			this._loadCachedSocketKey(playerName, roomCode) ||
+			(await getNewSocketKey({
 				siteUrl,
 				roomCode,
 				passphrase,
 				playerName,
-			});
-		}
-
-		this._saveSocketKey(successfulSocketKey, playerName, roomCode);
+			}));
 
 		// Save the room params so other methods can read them
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -172,7 +175,7 @@ export class Bingosync extends EventEmitter {
 		}, this.fullUpdateIntervalTime);
 
 		await this._fullUpdate();
-		await this._createWebsocket(socketUrl, successfulSocketKey);
+		await this._createWebsocket(socketUrl, socketKey);
 	}
 
 	disconnect(): void {
@@ -235,15 +238,46 @@ export class Bingosync extends EventEmitter {
 				}
 			};
 
-			this._websocket.onmessage = event => {
+			this._websocket.onmessage = async event => {
 				let json;
 				try {
 					json = JSON.parse(event.data as string);
 				} catch (_) {
 					debug("Failed to parse message:", event.data);
+					return;
 				}
 
 				if (json.type === "error") {
+					// This error can happen when the socket key expires,
+					// which can happen when bingosync.com is redeployed or restarted.
+					// In these cases, we often just need to request a new socket key and try again.
+					if (
+						json.error ===
+							"unable to authenticate, try refreshing" &&
+						this._numSocketAuthAttempts < this.maxSocketAuthAttempts
+					) {
+						if (!this._websocket) {
+							reject(
+								new Error(
+									"The websocket disappeared when it shouldn't have",
+								),
+							);
+							return;
+						}
+
+						this._numSocketAuthAttempts++;
+						this._websocket.send(
+							/* eslint-disable @typescript-eslint/camelcase */
+							JSON.stringify({
+								socket_key: await getNewSocketKey(
+									this.roomParams,
+								),
+							}),
+							/* eslint-enable @typescript-eslint/camelcase */
+						);
+						return;
+					}
+
 					clearInterval(this._fullUpdateInterval);
 					this._destroyWebsocket();
 					this._setStatus("error");
@@ -264,10 +298,18 @@ export class Bingosync extends EventEmitter {
 				}
 
 				if (!settled) {
-					resolve();
+					// If we're here, then we know this socket key is valid, and we can save it for later.
+					this._saveSocketKey(
+						socketKey,
+						this.roomParams.playerName,
+						this.roomParams.roomCode,
+					);
 					this._setStatus("connected");
 					settled = true;
+					resolve();
 				}
+
+				this._numSocketAuthAttempts = 0;
 
 				if (json.type === "goal") {
 					const index = parseInt(json.square.slot.slice(4), 10) - 1;
