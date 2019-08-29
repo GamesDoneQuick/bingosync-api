@@ -13,6 +13,7 @@ const debug = dbg("bingosync-api");
 interface Events {
 	"status-changed": [string];
 	"board-changed": [BoardState];
+	error: [Error];
 }
 
 export type CellColor =
@@ -323,12 +324,10 @@ export class Bingosync extends EventEmitter<Events> {
 						"Socket protocol error:",
 						json.error ? json.error : json,
 					);
+					const errorMsg = json.error ? json.error : "unknown error";
+					this.emit("error", new Error(errorMsg));
 					if (!settled) {
-						reject(
-							new Error(
-								json.error ? json.error : "unknown error",
-							),
-						);
+						reject(new Error(errorMsg));
 						settled = true;
 					}
 

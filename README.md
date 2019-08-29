@@ -35,6 +35,12 @@ bingosync.on("board-changed", boardState => {
 	});
 });
 
+// Set up an error handler to be informed of runtime issues.
+// If you don't attach this handler, errors will be silently discarded.
+bingosync.on("error", error => {
+	console.error("something went wrong:", error);
+});
+
 // Connect to the room.
 bingosync
 	.joinRoom({
