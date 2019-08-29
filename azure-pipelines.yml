@@ -8,7 +8,7 @@ pool:
   vmImage: "Ubuntu-16.04"
 
 steps:
-  - script: npm i
+  - script: npm ci
     displayName: "Install npm dependencies"
 
   - script: npm t
