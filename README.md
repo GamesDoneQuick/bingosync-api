@@ -54,6 +54,9 @@ bingosync
 	.catch(error => {
 		console.error("oh no something went wrong:", error);
 	});
+
+// If you want to kill the connection:
+bingosync.disconnect();
 ```
 
 ### Connecting to alternate deployments of Bingosync
