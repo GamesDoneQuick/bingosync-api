@@ -350,7 +350,17 @@ export class Bingosync extends EventEmitter<Events> {
 
 				if (json.type === "goal") {
 					const index = parseInt(json.square.slot.slice(4), 10) - 1;
-					this.boardState.cells[index] = json.square;
+
+					// Update the state in an immutable manner.
+					// This improves our interop with things like React.
+					const newBoardState = {
+						cells: this.boardState.cells.slice(0),
+					};
+					newBoardState.cells[index] = {
+						...newBoardState.cells[index],
+						...json.square,
+					};
+					this.boardState = newBoardState;
 					this.emit("board-changed", this.boardState);
 				}
 			};
