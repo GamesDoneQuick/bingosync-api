@@ -1,4 +1,4 @@
-# bingosync-api
+# bingosync-api [![Build Status](https://dev.azure.com/gamesdonequick/bingosync-api/_apis/build/status/GamesDoneQuick.bingosync-api?branchName=master)](https://dev.azure.com/gamesdonequick/bingosync-api/_build/latest?definitionId=8&branchName=master)
 
 > Programmatically interact with bingosync.com in realtime.
 
