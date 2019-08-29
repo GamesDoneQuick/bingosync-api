@@ -4,7 +4,7 @@
 
 ## Motivation
 
-Bingosync is a great tool for speedrunners looking to play just about any kind of bingo they can imagine. And, since it is backed by a realtime websocket, it's a great source of data for other applications to consume. However, its API isn't the easiest, and creating a reliable websocket connection that can recover from unforeseen issues is challening. So, we created this package to present a simplified and robust API for interacting with Bingosync deployments.
+Bingosync is a great tool for speedrunners looking to play just about any kind of bingo they can imagine. And, since it is backed by a realtime websocket, it's a great source of data for other applications to consume. However, its API isn't the easiest, and creating a reliable websocket connection that can recover from unforeseen issues is challenging. So, we created this package to present a simplified and robust API for interacting with Bingosync deployments.
 
 ## Installation
 
