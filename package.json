@@ -1,6 +1,6 @@
 {
 	"name": "@gamesdonequick/bingosync-api",
-	"version": "1.0.0",
+	"version": "0.0.0-development",
 	"description": "Programmatically interact with bingosync.com in realtime.",
 	"main": "build/index.js",
 	"files": [
