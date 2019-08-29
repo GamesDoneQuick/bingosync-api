@@ -4,7 +4,9 @@
 	"description": "Programmatically interact with bingosync.com in realtime.",
 	"main": "build/index.js",
 	"files": [
-		"build"
+		"build",
+		"!build/test",
+		"!build/lib/localstorage"
 	],
 	"scripts": {
 		"pretest": "npm run lint && npm run build",
