@@ -1,4 +1,4 @@
-#bingosync-api
+# bingosync-api
 
 > Programmatically interact with bingosync.com in realtime.
 
